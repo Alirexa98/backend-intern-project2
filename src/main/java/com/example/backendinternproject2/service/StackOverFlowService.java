@@ -1,6 +1,8 @@
 package com.example.backendinternproject2.service;
 
 import com.example.backendinternproject2.controller.StackOverFlowController;
+import com.example.backendinternproject2.elasticsearch.ElasticQuestionRepository;
+import com.example.backendinternproject2.elasticsearch.mapping.QuestionMapping;
 import com.example.backendinternproject2.entity.*;
 import com.example.backendinternproject2.model.common.PostModel;
 import com.example.backendinternproject2.model.request.PostRequestModel;
@@ -39,7 +41,7 @@ public class StackOverFlowService {
   private final String COMMENTS = "comments";
   private final String POSTS = "posts";
 
-  public StackOverFlowService(QuestionRepository questionRepository, AnswerRepository answerRepository, TagRepository tagRepository, CommentRepository commentRepository, UserRepository userRepository, Executor executor, KafkaTemplate<String, String> kafkaTemplate) {
+  public StackOverFlowService(QuestionRepository questionRepository, AnswerRepository answerRepository, TagRepository tagRepository, CommentRepository commentRepository, UserRepository userRepository, Executor executor, KafkaTemplate<String, String> kafkaTemplate, ElasticQuestionRepository elasticQuestionRepository) {
     this.questionRepository = questionRepository;
     this.answerRepository = answerRepository;
     this.tagRepository = tagRepository;
@@ -47,6 +49,7 @@ public class StackOverFlowService {
     this.userRepository = userRepository;
     this.executor = executor;
     this.kafkaTemplate = kafkaTemplate;
+    this.elasticQuestionRepository = elasticQuestionRepository;
     var mapper = new XmlMapper();
     mapper.registerModule(new JavaTimeModule());
     mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -59,6 +62,7 @@ public class StackOverFlowService {
   private CommentRepository commentRepository;
   private UserRepository userRepository;
   private KafkaTemplate<String, String> kafkaTemplate;
+  private ElasticQuestionRepository elasticQuestionRepository;
   private Executor executor;
   private XmlMapper xmlMapper;
 
@@ -72,7 +76,8 @@ public class StackOverFlowService {
   }
 
   public PostResponseModel searchPosts(PostRequestModel requestModel) {
-    var posts = questionRepository.searchQuestions(requestModel.getKeywords(), String.join("%", requestModel.getTags()), requestModel.getFromDate(), requestModel.getMinScore(), PageRequest.of(requestModel.getPageNumber(), requestModel.getPageCount()));
+    var elasticPosts = elasticQuestionRepository.findQuestions(requestModel.getKeywords(), String.join(" ", requestModel.getTags()), requestModel.getFromDate(), requestModel.getMinScore(), PageRequest.of(requestModel.getPageNumber(), requestModel.getPageCount()));
+    var posts = questionRepository.findAllById(elasticPosts.map(QuestionMapping::getId));
     return new PostResponseModel(posts.stream().map((item) -> {
       if (item.getBestAnswerId() != null) {
         var bestAnswer = answerRepository.findById(item.getBestAnswerId());
@@ -114,7 +119,7 @@ public class StackOverFlowService {
     System.out.println(filePath);
     try (var linesStream = Files.lines(Paths.get(filePath))) {
       linesStream.skip(1).filter((line) -> !(line.equals("<" + ignoreTag + ">") || line.equals("</" + ignoreTag + ">"))).forEach(line -> {
-        kafkaTemplate.send("backend_project2",ignoreTag + line);
+        kafkaTemplate.send("backend_project2", ignoreTag + line);
       });
     } catch (Exception e) {
       e.printStackTrace();
@@ -190,7 +195,9 @@ public class StackOverFlowService {
     var postModel = xmlMapper.readValue(postXml, XmlPostModel.class);
     switch (postModel.getPostType()) {
       case 1:
-        questionRepository.save(QuestionEntity.of(postModel));
+        var question = QuestionEntity.of(postModel);
+        questionRepository.save(question);
+        elasticQuestionRepository.save(QuestionMapping.of(question));
         break;
       case 2:
         answerRepository.save(AnswerEntity.of(postModel));
