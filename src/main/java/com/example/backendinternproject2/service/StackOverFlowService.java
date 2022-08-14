@@ -20,6 +20,8 @@ import lombok.SneakyThrows;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
@@ -32,13 +34,19 @@ import java.util.stream.Collectors;
 @Service
 @EnableKafka
 public class StackOverFlowService {
-  public StackOverFlowService(QuestionRepository questionRepository, AnswerRepository answerRepository, TagRepository tagRepository, CommentRepository commentRepository, UserRepository userRepository, Executor executor) {
+  private final String USERS = "users";
+  private final String TAGS = "tags";
+  private final String COMMENTS = "comments";
+  private final String POSTS = "posts";
+
+  public StackOverFlowService(QuestionRepository questionRepository, AnswerRepository answerRepository, TagRepository tagRepository, CommentRepository commentRepository, UserRepository userRepository, Executor executor, KafkaTemplate<String, String> kafkaTemplate) {
     this.questionRepository = questionRepository;
     this.answerRepository = answerRepository;
     this.tagRepository = tagRepository;
     this.commentRepository = commentRepository;
     this.userRepository = userRepository;
     this.executor = executor;
+    this.kafkaTemplate = kafkaTemplate;
     var mapper = new XmlMapper();
     mapper.registerModule(new JavaTimeModule());
     mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -50,6 +58,7 @@ public class StackOverFlowService {
   private TagRepository tagRepository;
   private CommentRepository commentRepository;
   private UserRepository userRepository;
+  private KafkaTemplate<String, String> kafkaTemplate;
   private Executor executor;
   private XmlMapper xmlMapper;
 
@@ -86,29 +95,58 @@ public class StackOverFlowService {
   }
 
   private void readUsers() {
-    readFile("src/main/data/Users.xml", "users", this::insertUser);
+    readFile("src/main/data/Users.xml", USERS);
   }
 
   private void readTags() {
-    readFile("src/main/data/Tags.xml", "tags", this::insertTag);
+    readFile("src/main/data/Tags.xml", TAGS);
   }
 
   private void readComments() {
-    readFile("src/main/data/Comments.xml", "comments", this::insertComment);
+    readFile("src/main/data/Comments.xml", COMMENTS);
   }
 
   private void readPosts() {
-    readFile("src/main/data/Posts.xml", "posts", this::insertPost);
+    readFile("src/main/data/Posts.xml", POSTS);
   }
 
-  private void readFile(String filePath, String ignoreTag, Consumer<String> processItem) {
+  private void readFile(String filePath, String ignoreTag) {
     System.out.println(filePath);
     try (var linesStream = Files.lines(Paths.get(filePath))) {
-      linesStream.skip(1).filter((line) -> !(line.equals("<" + ignoreTag + ">") || line.equals("</" + ignoreTag + ">"))).forEach(processItem);
+      linesStream.skip(1).filter((line) -> !(line.equals("<" + ignoreTag + ">") || line.equals("</" + ignoreTag + ">"))).forEach(line -> {
+        kafkaTemplate.send("backend_project2",ignoreTag + line);
+      });
     } catch (Exception e) {
       e.printStackTrace();
     }
     System.out.println("Ended");
+  }
+
+  @KafkaListener(topics = "backend_project2", groupId = "test_group")
+  public void listener1(String message) {
+    processKafkaMessage(message);
+  }
+
+  @KafkaListener(topics = "backend_project2", groupId = "test_group")
+  public void listener2(String message) {
+    processKafkaMessage(message);
+  }
+
+  @KafkaListener(topics = "backend_project2", groupId = "test_group")
+  public void listener3(String message) {
+    processKafkaMessage(message);
+  }
+
+  private void processKafkaMessage(String message) {
+    if (message.startsWith(USERS)) {
+      insertUser(message.substring(USERS.length()));
+    } else if (message.startsWith(TAGS)) {
+      insertTag(message.substring(TAGS.length()));
+    } else if (message.startsWith(COMMENTS)) {
+      insertComment(message.substring(COMMENTS.length()));
+    } else if (message.startsWith(POSTS)) {
+      insertPost(message.substring(POSTS.length()));
+    }
   }
 
   @SneakyThrows
